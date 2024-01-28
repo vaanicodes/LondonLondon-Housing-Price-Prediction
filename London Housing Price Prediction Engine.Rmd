@@ -1,0 +1,775 @@
+---
+title: 'London Housing Price Prediction Engine: Data Science for Business Capstone Project'
+author: "Vaani Rawat"
+date: "`r Sys.Date()`"
+output: 
+    html_document:
+      number_sections: true
+      highlight: haddock
+      theme: spacelab
+      toc: yes
+      toc_depth: 2
+      toc_float:
+        collapsed: false
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+<style>
+div.navy1 { background-color:#686868; border-radius: 5px; padding: 20px; border-style: groove; color: #ffffff;}
+
+</style>
+
+
+
+```{r, load_libraries, include = FALSE}
+
+if(!is.element("tidyverse", installed.packages()[,1]))
+{  install.packages("tidyverse", repos = "http://cran.us.r-project.org")}
+
+if(!is.element("Hmisc", installed.packages()[,1]))
+{  install.packages("Hmisc", repos = "http://cran.us.r-project.org")} #package for data summary using `describe`
+
+if(!is.element("ggplot2", installed.packages()[,1]))
+{  install.packages("ggplot2", repos = "http://cran.us.r-project.org")} #package for plots
+if(!is.element("ggthemes", installed.packages()[,1]))
+{  install.packages("ggthemes", repos = "http://cran.us.r-project.org")} #package to make fancier ggplots
+
+if(!is.element("janitor", installed.packages()[,1]))
+{ install.packages("janitor", repos = "http://cran.us.r-project.org")} #package to visualize results of machine learning tools
+if(!is.element("rpart.plot", installed.packages()[,1]))
+{  install.packages("rpart.plot", repos = "http://cran.us.r-project.org")} #package to visualize trees
+
+library(rpart.plot)
+library(caret)
+library(tidyverse) # the usual stuff: dplyr, readr, and other goodies
+library(lubridate)
+library(janitor) # clean_names()
+library(Hmisc)
+library(MASS)
+library(caretEnsemble)
+```
+
+# Introduction and learning objectives
+
+<div class = "navy1">
+The purpose of this exercise is to build an estimation engine to guide investment decisions in London house market. You will first build machine learning algorithms (and tune them) to estimate the house prices given variety of information about each property. Then, using your algorithm, you will choose 200 houses to invest in out of about 2000 houses on the market at the moment.
+
+
+<b>Learning objectives</b>
+ 
+<ol type="i">
+  <li>Using different data mining algorithms for prediction.</li>
+  <li>Dealing with large data sets</li>
+  <li>Tuning data mining algorithms</li>
+  <li>Interpreting data mining algorithms and deducing importance of variables</li>
+  <li>Using results of data mining algorithms to make business decisions</li>
+</ol>  
+</div>
+
+# Load data
+
+There are two sets of data, i) training data that has the actual prices ii) out of sample data that has the asking prices. Load both data sets. 
+
+Make sure you understand what information each column contains. Note that not all information provided might be useful in predicting house prices, but do not make any assumptions before you decide what information you use in your prediction algorithms.
+
+```{r read-investigate}
+#read in the data
+
+london_house_prices_2019_training<-read.csv("training_data_assignment_with_prices.csv")
+london_house_prices_2019_out_of_sample<-read.csv("test_data_assignment.csv")
+
+
+
+#fix data types in both data sets
+
+#fix dates
+london_house_prices_2019_training <- london_house_prices_2019_training %>% mutate(date=as.Date(date))
+london_house_prices_2019_out_of_sample<-london_house_prices_2019_out_of_sample %>% mutate(date=as.Date(date))
+#change characters to factors
+london_house_prices_2019_training <- london_house_prices_2019_training %>% mutate_if(is.character,as.factor)
+london_house_prices_2019_out_of_sample<-london_house_prices_2019_out_of_sample %>% mutate_if(is.character,as.factor)
+
+#take a quick look at what's in the data
+str(london_house_prices_2019_training)
+str(london_house_prices_2019_out_of_sample)
+
+```
+
+
+```{r split the price data to training and testing}
+#let's do the initial split
+library(rsample)
+# Set a seed for reproducibility
+set.seed(123) 
+train_test_split <- initial_split(london_house_prices_2019_training, prop = 0.75) #training set contains 75% of the data
+# Create the training dataset
+train_data <- training(train_test_split)
+test_data <- testing(train_test_split)
+
+
+
+```
+
+
+# Visualize data 
+
+Visualize and examine the data. What plots could be useful here? What do you learn from these visualizations?
+
+```{r visualize}
+# Bar graph showing median price of each zone
+
+ggplot(london_house_prices_2019_training, aes(x = factor(london_zone), y = price / 1000)) + # Dividing price by 1000 to get values in '000s
+    stat_summary(fun = median, geom = "bar", fill = "skyblue3") + # Creating a bar plot with median values
+    scale_y_continuous(labels = scales::number_format(suffix = "k")) + # Formatting y-axis labels in '000s
+    labs(x = "London Zone", 
+         y = "Median Price", 
+         title = "Median Price by London Zone",
+         subtitle = "(Prices in Thousand GBP)") +
+    theme_minimal() + 
+    theme(
+        plot.subtitle = element_text(color = "darkgrey", face = "italic"), 
+        axis.title.x = element_text(margin = margin(t = 10)), 
+        axis.title.y = element_text(margin = margin(r = 10)), 
+        panel.grid.major = element_line(color = "#F0F0F0"), 
+        panel.grid.minor = element_line(color = "#F0F0F0")
+    )
+
+
+# Bar graph for Median Price by District 
+
+ggplot(london_house_prices_2019_training, aes(y = district, x = price / 1000)) + 
+    stat_summary(fun = median, geom = "bar", fill = "steelblue") + 
+    scale_x_continuous(labels = scales::number_format(suffix = "k")) + # Formatting x-axis labels in '000s (thousands)
+    labs(y = "District", 
+         x = "Median Price", 
+         title = "Median Price by District",
+         subtitle = "(Prices in Thousand GBP)") + 
+    theme_minimal() + 
+    theme(
+        plot.subtitle = element_text(color = "darkgrey", face = "italic"), 
+        axis.title.y = element_text(margin = margin(t = 10)),
+        axis.title.x = element_text(margin = margin(r = 10)),
+         plot.margin = margin(r = 20, l = 10, t = 10, b = 10, unit = "pt") 
+    )
+
+
+
+# Boxplot for Property Type vs. Price
+
+ggplot(london_house_prices_2019_training, aes(x = property_type, y = price / 1000)) + # Dividing price by 1000 to get values in '000s
+    geom_boxplot(color = "skyblue4") + 
+    scale_y_continuous(labels = scales::number_format(suffix = "k")) + # Formatting y-axis labels in '000s (thousands)
+    labs(x = "Property Type", 
+         y = "Price", 
+         title = "Property Type vs. Price",
+         subtitle = "(Prices in Thousand GBP)") + 
+    theme_minimal() + 
+    theme(
+        plot.subtitle = element_text(color = "darkgrey", face = "italic"), 
+        axis.title.x = element_text(margin = margin(t = 10)), 
+        axis.title.y = element_text(margin = margin(r = 10))
+    )
+
+
+# Scatter plot for Total Floor Area vs. Price
+
+ggplot(london_house_prices_2019_training, aes(x = total_floor_area, y = price / 1000)) + # Dividing price by 1000 to get values in '000s
+    geom_point(color = "skyblue3", alpha = 0.5) + 
+    scale_y_continuous(labels = scales::number_format(suffix = "k")) + # Formatting y-axis labels in '000s (thousands)
+    labs(x = "Total Floor Area", 
+         y = "Price", 
+         title = "Total Floor Area vs. Price",
+         subtitle = "(Prices in Thousand GBP)") +
+    theme_minimal() + 
+    theme(
+        plot.subtitle = element_text(color = "darkgrey", face = "italic"), 
+        axis.title.x = element_text(margin = margin(t = 10)), 
+        axis.title.y = element_text(margin = margin(r = 10)) 
+    )
+```
+
+
+1. The first graph highlights the premium on central London locations, with Zone 1 commanding the highest median prices, which progressively decrease with distance from the center. This indicates the importance of proximity to central London in property valuation and hints at the potential for higher investment returns in these areas due to strong demand.
+
+2. The second visualization breaks down property prices by district, showing a stark contrast between the affluent areas of Kensington and Chelsea, and Westminster, and the more affordable Barking and Dagenham. This distribution offers a detailed perspective on the economic diversity within the city and helps identify which districts might offer growth potential versus those that are already established high-value areas.
+
+3. The boxplot categorizes properties by type and clearly delineates the variability within each category. The wide price range for Type T properties suggests a market segment with significant diversity in terms of property features and buyer preferences, whereas the more uniform pricing of Type F properties suggests a segment that may cater to a specific market niche or have less variation in property characteristics.
+
+4. The scatter plot relating floor area to price underscores the positive association between size and value within the London housing market. The dense clustering of smaller properties at lower price points could reflect a higher volume of more affordable, compact living spaces, while the greater price dispersion among larger properties might be indicative of a luxury segment where buyers' preferences and property features greatly influence price.
+
+These visualizations collectively offer a multi-dimensional picture of London's housing market, emphasizing the importance of location, property type, and size on pricing dynamics. Such insights are crucial for stakeholders, including homebuyers, investors, and policymakers, to navigate the complexities of the market, identify trends, and make strategic decisions grounded in data-driven evidence.
+
+Estimate a correlation table between prices and other continuous variables. What do you glean from the correlation table?
+
+```{r, correlation table, warning=FALSE, message=FALSE}
+
+# produce a correlation table using GGally::ggcor()
+# this takes a while to plot
+
+library("GGally")
+london_house_prices_2019_training %>% 
+  dplyr::select(-ID) %>% #keep Y variable last
+  ggcorr(method = c("pairwise", "pearson"), layout.exp = 2,label_round=2, label = TRUE,label_size = 2,hjust = 1,nbreaks = 5,size = 2,angle = -20)
+
+```
+
+1. total_floor_area has strong positive correlation (0.69), indicating that larger properties tend to have higher prices.
+2. co2_emissions_current and co2_emissions_potential both show moderate positive correlations (0.53 and 0.52), suggesting that properties with higher CO2 emissions, possibly larger or less energy-efficient, might be more expensive.
+3. number_habitable_rooms shows a moderate positive correlation (0.48) with price, indicating that properties with more rooms are generally more expensive.
+4. average_income shows a positive correlation (0.32), hinting that properties in areas with higher average incomes are more costly.
+5. london_zone has a moderate negative correlation (-0.31), suggesting that properties in central London zones (lower zone numbers) are more expensive.
+6. longitude has a slight negative correlation (-0.16), could be related to geographic positioning within the city.
+7. distance_to_station has a negative correlation (-0.13), indicating that properties closer to stations are more expensive.
+8. num_tube_lines is positively correlated (0.25), showing that proximity to more tube lines can increase property prices.
+9. num_rail_lines is Negatively correlated (-0.15), which is a bit counterintuitive 
+10. Features like latitude, altitude, num_light_rail_lines, population, energy_consumption_current and energy_consumption_potential show weaker correlations with price
+
+The dataset shows high collinearity among these pairs: total_floor_area and number_habitable_rooms, total_floor_area and co2_emissions_current (0.76), and co2_emissions_current and co2_emissions_potential (0.72). These strong correlations suggest overlapping information among these features, which could affect predictive modeling accuracy. Addressing collinearity may involve feature combination, removal, or using dimensionality reduction.
+
+# Fit a linear regression model
+
+To help you get started I build a linear regression model below. I chose a subset of the features with no particular goal. You can (and should) add more variables and/or choose variable selection methods if you want.
+
+```{r LR model}
+
+# Set the global seed
+set.seed(123)
+#Define control variables
+control <- trainControl (
+    method="cv",
+    number=5,
+    verboseIter=TRUE) #by setting this to true the model will report its progress after each estimation
+
+#we are going to train the model and report the results using k-fold cross validation
+model1_lm<-train(
+# Adjusting the dataset by:
+# 1. Adding 'total_floor_area', 'average_income', 'london_zone', 'co2_emissions_current', 'num_tube_lines', and 'num_rail_lines' 
+# 2. Removing 'freehold_or_leasehold' and 'whether_old_or_new' due to their lower significance in our analysis.
+    price ~ distance_to_station+water_company+property_type+latitude+longitude + total_floor_area +co2_emissions_current +average_income+london_zone+num_tube_lines+num_rail_lines,
+    train_data,
+   method = "lm",
+    trControl = control
+   )
+
+# summary of the results
+summary(model1_lm)
+```
+
+
+```{r}
+# we can check variable importance as well
+importance <- varImp(model1_lm, scale=TRUE)
+plot(importance)
+
+
+```
+
+## Predict the values in testing and out of sample data
+
+Below I use the predict function to test the performance of the model in testing data and summarize the performance of the linear regression model. How can you measure the quality of your predictions?
+
+```{r}
+# We can predict the testing values
+
+predictions_lr <- predict(model1_lm,test_data)
+
+lr_results<-data.frame(  RMSE = RMSE(predictions_lr, test_data$price), 
+                            Rsquare = R2(predictions_lr, test_data$price))
+
+                            
+lr_results                         
+
+#We can predict prices for out of sample data the same way
+predictions_oos_lr <- predict(model1_lm,london_house_prices_2019_out_of_sample)
+
+lr_results_oos<-data.frame(  RMSE = RMSE(predictions_oos_lr, london_house_prices_2019_out_of_sample$asking_price), 
+                            Rsquare = R2(predictions_oos_lr, london_house_prices_2019_out_of_sample$asking_price))
+
+                            
+lr_results_oos
+```
+
+To measure the quality of predictions for predicted prices, Root Mean Squared Error (RMSE) and R-squared (R²) are used. 
+
+RMSE quantifies the average difference between the predicted values and the actual values. A lower RMSE value indicates better prediction accuracy, as it reflects a smaller average difference between the predicted and actual values. RMSE is particularly helpful in contexts where large errors are undesirable. Since it squares the prediction errors, larger errors are penalized more heavily. This makes RMSE a good measure when high accuracy in prediction is crucial, and you want to avoid large prediction errors.
+
+R² indicates the proportion of the variance in the dependent variable that is predictable from the independent variables. A higher R² value suggests that the model explains a greater proportion of the variance in the dependent variable, indicating a better fit of the model to the data. R² is useful for understanding the overall effectiveness of the model in explaining the variability of the data. It gives an idea of how well unseen data will be predicted by the model, assuming that the future data has similar characteristics to current data.
+
+
+# Fit a tree model
+
+Next I fit a tree model using the same subset of features. Again you can (and should) add more variables and tune the parameter of your tree to find a better fit. 
+
+Compare the performance of the linear regression model with the tree model; which one performs better? Why do you think that is the case?
+
+```{r Tree model}
+# Set a seed for reproducibility
+set.seed(123)
+
+# Defining a range for the complexity parameter 'cp' for hyperparameter tuning
+grid_tree <- expand.grid(
+  cp = seq(0.0000, 0.0500, by = 0.001)  # Varying 'cp' from 0 to 0.05 in increments of 0.001
+)
+
+# Setting control parameters to prevent overfitting in the tree model
+control_params <- rpart.control(
+  maxdepth = 6,   # Maximum depth of any node of the final tree
+  minsplit = 30,  # Minimum number of observations that must exist in a node for a split to be attempted
+  minbucket = 20  # Minimum number of observations in any terminal <leaf> node
+)
+
+# Training a decision tree model using the 'rpart' method
+model2_tree <- train(
+  price ~ distance_to_station + water_company + property_type + latitude + longitude + total_floor_area + average_income + london_zone + co2_emissions_current + num_tube_lines + num_rail_lines,
+  train_data, 
+  method = "rpart",
+  trControl = control,
+  tuneLength = 10,
+  tuneGrid = grid_tree,
+  control = control_params
+)
+
+# View performance metrics of the different models generated during tuning
+model2_tree$results
+
+# Visualize the final decision tree
+rpart.plot(model2_tree$finalModel)
+
+# Visualize the importance of each variable in the decision tree
+importance <- varImp(model2_tree, scale = TRUE)
+plot(importance)
+
+
+```
+
+```{r}
+# Predict the testing values
+predictions_tree <- predict(model2_tree,test_data)
+
+tree_results<-data.frame(  RMSE = RMSE(predictions_tree, test_data$price), 
+                            Rsquare = R2(predictions_tree, test_data$price))
+
+                            
+tree_results                         
+
+# Predict prices for out of sample data the same way
+predictions_oos_tree <- predict(model2_tree,london_house_prices_2019_out_of_sample)
+
+tree_results_oos<-data.frame(  RMSE = RMSE(predictions_oos_tree, london_house_prices_2019_out_of_sample$asking_price), 
+                            Rsquare = R2(predictions_oos_tree, london_house_prices_2019_out_of_sample$asking_price))
+
+tree_results_oos
+                          
+```
+
+On both test and out-of-sample data, the Decision Tree model outperforms the Linear Regression model, evident from its lower RMSE values (244,580.8 on test data and 407,220.9 on out-of-sample data) compared to those of Linear Regression (300,426.8 on test data and 456,163.1 on out-of-sample data). The better performance of the Decision Tree model can be attributed to its ability to effectively capture non-linear relationships and interactions among variables, which is a limitation of the Linear Regression model that assumes linear relationships. Furthermore, Decision Trees tend to be more robust against outliers and skewed data, enhancing their suitability for this dataset.
+
+# Other algorithms
+
+Use at least two other algorithms to predict prices. Don't forget to tune the parameters of these algorithms. And then compare the performances of your algorithms to linear regression and trees.
+
+## KNN Model
+
+```{r KNN model}
+# Define a grid of hyperparameters to search for the kNN model
+# The main parameter to tune in kNN is the number of neighbors (k)
+grid_knn <- expand.grid(.k = seq(1, 20, 1))  # Considering k values from 1 to 20
+
+# Set a seed for reproducibility of results
+set.seed(123)
+
+# Train a kNN model using the defined grid of hyperparameters
+model3_knn <- train(
+  price ~ distance_to_station + water_company + property_type + latitude + longitude + total_floor_area + average_income + london_zone + co2_emissions_current + num_tube_lines + num_rail_lines,
+  data = train_data,  
+  method = "knn",    
+  trControl = control,  
+  tuneGrid = grid_knn,  
+  preProcess = c("center", "scale")  # Preprocessing steps: centering and scaling
+)
+
+# Print the results of the model training
+print(model3_knn)
+
+# Plot model performance RMSE over different values of k
+plot(model3_knn)
+
+# Print the details of the best model (with the optimal number of neighbors)
+print(model3_knn$finalModel)
+```
+
+```{r}
+# Predict the testing values
+predictions_knn <- predict(model3_knn,test_data)
+
+knn_results<-data.frame(  RMSE = RMSE(predictions_knn, test_data$price), 
+                            Rsquare = R2(predictions_knn, test_data$price))
+
+                            
+knn_results                         
+
+# Predict prices for out of sample data the same way
+predictions_oos_knn <- predict(model3_knn,london_house_prices_2019_out_of_sample)
+
+knn_results_oos<-data.frame(  RMSE = RMSE(predictions_oos_knn, london_house_prices_2019_out_of_sample$asking_price), 
+                            Rsquare = R2(predictions_oos_knn, london_house_prices_2019_out_of_sample$asking_price))
+
+knn_results_oos
+```
+
+## Random Forest Model
+
+```{r Random Forest model}
+
+# Define a grid of hyperparameters to search for the Random Forest model
+grid_rf <- expand.grid(
+  .mtry = seq(2, 8, by = 2),  # Number of variables randomly sampled as candidates at each split
+  .splitrule = c("variance", "extratrees"),  # Criteria for splitting nodes
+  .min.node.size = 5                       # Minimum size of terminal nodes
+)
+
+# Set a seed for reproducibility of the model
+set.seed(123)
+
+# Train a Random Forest model using defined grid of hyperparameters
+model4_rf <- train(
+  price ~ distance_to_station + water_company + property_type + latitude + longitude + total_floor_area + average_income + london_zone + co2_emissions_current + num_tube_lines + num_rail_lines,
+  data = train_data,                    
+  method = "ranger",                    
+  metric = "RMSE",                      
+  trControl = control,                  
+  tuneGrid = grid_rf,                  
+  importance = 'permutation'            
+)
+
+# Print the results of the model training
+print(model4_rf)
+
+# Print the details of the best model (with optimal hyperparameters)
+print(model4_rf$finalModel)
+
+# Visualize the variable importance in the Random Forest model
+# The importance is measured using permutation
+importance <- varImp(model4_rf, scale = TRUE)
+plot(importance)
+
+
+```
+
+```{r}
+# Predict the testing values
+predictions_rf <- predict(model4_rf,test_data)
+
+rf_results<-data.frame(  RMSE = RMSE(predictions_rf, test_data$price), 
+                            Rsquare = R2(predictions_rf, test_data$price))
+
+                            
+rf_results                         
+
+# Predict prices for out of sample data the same way
+predictions_oos_rf <- predict(model4_rf,london_house_prices_2019_out_of_sample)
+
+rf_results_oos<-data.frame(  RMSE = RMSE(predictions_oos_rf, london_house_prices_2019_out_of_sample$asking_price), 
+                            Rsquare = R2(predictions_oos_rf, london_house_prices_2019_out_of_sample$asking_price))
+
+rf_results_oos
+```
+
+## GBM Model
+
+```{r GBM model}
+# Define a grid of hyperparameters for tuning the GBM model
+grid_gbm <- expand.grid(
+  .n.trees = 300,                    # Number of trees to fit
+  .interaction.depth = (6:8),        # Maximum depth of variable interactions
+  .shrinkage = 0.15,                 # Learning rate (shrinkage)
+  .n.minobsinnode = 10               # Minimum number of observations in the terminal nodes
+)
+
+# Set a seed for reproducibility
+set.seed(123)
+
+# Train a GBM model using the defined grid of hyperparameters
+model5_gbm <- train(
+  price ~ distance_to_station + water_company + property_type + latitude + longitude + total_floor_area + average_income + london_zone + co2_emissions_current + num_tube_lines + num_rail_lines,
+  data = train_data,              
+  method = "gbm",                  
+  metric = "RMSE",                 
+  trControl = control,             
+  tuneGrid = grid_gbm,            
+  verbose = FALSE                  
+)
+
+# Print the results of the model training
+print(model5_gbm)
+
+# Plot model performance over different values of hyperparameters
+plot(model5_gbm)
+
+# Print the details of the best model (with optimal hyperparameters)
+print(model5_gbm$finalModel)
+
+```
+
+```{r}
+# Predict the testing values
+predictions_gbm <- predict(model5_gbm,test_data)
+
+gbm_results<-data.frame(  RMSE = RMSE(predictions_gbm, test_data$price), 
+                            Rsquare = R2(predictions_gbm, test_data$price))
+
+                            
+gbm_results                         
+
+# Predict prices for out of sample data the same way
+predictions_oos_gbm <- predict(model5_gbm,london_house_prices_2019_out_of_sample)
+
+gbm_results_oos<-data.frame(  RMSE = RMSE(predictions_oos_gbm, london_house_prices_2019_out_of_sample$asking_price), 
+                            Rsquare = R2(predictions_oos_gbm, london_house_prices_2019_out_of_sample$asking_price))
+
+gbm_results_oos
+```
+
+## XGB Model
+
+```{r XGB model}
+
+# Define a grid of hyperparameters for tuning the XGBoost model
+grid_xg <- expand.grid(
+  nrounds = seq(250, 350, 50),        # Number of boosting rounds
+  max_depth = (5:7),                  # Maximum depth of a tree
+  eta = 0.15,                         # Learning rate
+  gamma = 0.05,                       # Minimum loss reduction required to make a further partition
+  colsample_bytree = 0.75,            # Subsample ratio of columns when constructing each tree
+  min_child_weight = 1,               # Minimum sum of instance weight (hessian) needed in a child
+  subsample = 0.75                    # Subsample ratio of the training instances
+)
+
+# Set a seed for reproducibility
+set.seed(123)
+
+# Train an XGBoost model using the defined grid of hyperparameters
+model6_xgb <- train(
+  price ~ distance_to_station + water_company + property_type + latitude + longitude + total_floor_area + average_income + london_zone + co2_emissions_current + num_tube_lines + num_rail_lines,
+  data = train_data,                 
+  method = "xgbTree",                
+  metric = "RMSE",                   
+  trControl = control,               
+  tuneGrid = grid_xg,                
+  nthread = 1                        
+)
+
+# Print the results of the model training
+print(model6_xgb)
+
+# Plot model performance over different values of hyperparameters
+plot(model6_xgb)
+
+# Print the details of the best model (with optimal hyperparameters)
+print(model6_xgb$finalModel)
+
+```
+
+```{r}
+# Predict the testing values
+predictions_xgb <- predict(model6_xgb,test_data)
+
+xgb_results<-data.frame(  RMSE = RMSE(predictions_xgb, test_data$price), 
+                            Rsquare = R2(predictions_xgb, test_data$price))
+
+                            
+xgb_results                         
+
+# Predict prices for out of sample data the same way
+predictions_oos_xgb <- predict(model6_xgb,london_house_prices_2019_out_of_sample)
+
+xgb_results_oos<-data.frame(  RMSE = RMSE(predictions_oos_xgb, london_house_prices_2019_out_of_sample$asking_price), 
+                            Rsquare = R2(predictions_oos_xgb, london_house_prices_2019_out_of_sample$asking_price))
+
+xgb_results_oos
+```
+
+## Comparing Models
+
+```{r Comparing Models}
+# Calculate RMSE (Root Mean Squared Error) for each model using test data
+rmse_lr = RMSE(predictions_lr, test_data$price)
+rmse_tree = RMSE(predictions_tree, test_data$price) 
+rmse_knn = RMSE(predictions_knn, test_data$price)
+rmse_rf = RMSE(predictions_rf, test_data$price)
+rmse_gbm = RMSE(predictions_gbm, test_data$price)
+rmse_xgb = RMSE(predictions_xgb, test_data$price)
+
+# Calculate R-squared for each model using test data
+Rsquare_lr = R2(predictions_lr, test_data$price)
+Rsquare_tree = R2(predictions_tree, test_data$price)
+Rsquare_knn = R2(predictions_knn, test_data$price)
+Rsquare_rf = R2(predictions_rf, test_data$price)
+Rsquare_gbm = R2(predictions_gbm, test_data$price)
+Rsquare_xgb = R2(predictions_xgb, test_data$price)
+
+# Calculate RMSE for each model using out-of-sample data
+rmse_lr_oos = RMSE(predictions_oos_lr, london_house_prices_2019_out_of_sample$asking_price)
+rmse_tree_oos = RMSE(predictions_oos_tree, london_house_prices_2019_out_of_sample$asking_price)
+rmse_knn_oos = RMSE(predictions_oos_knn, london_house_prices_2019_out_of_sample$asking_price)
+rmse_rf_oos = RMSE(predictions_oos_rf, london_house_prices_2019_out_of_sample$asking_price)
+rmse_gbm_oos = RMSE(predictions_oos_gbm, london_house_prices_2019_out_of_sample$asking_price)
+rmse_xgb_oos = RMSE(predictions_oos_xgb, london_house_prices_2019_out_of_sample$asking_price)
+
+# Calculate R-squared for each model using out-of-sample data
+Rquare_lr_oos = R2(predictions_oos_lr, london_house_prices_2019_out_of_sample$asking_price)
+Rquare_tree_oos = R2(predictions_oos_tree, london_house_prices_2019_out_of_sample$asking_price)
+Rquare_knn_oos = R2(predictions_oos_knn, london_house_prices_2019_out_of_sample$asking_price)
+Rquare_rf_oos = R2(predictions_oos_rf, london_house_prices_2019_out_of_sample$asking_price)
+Rquare_gbm_oos = R2(predictions_oos_gbm, london_house_prices_2019_out_of_sample$asking_price)
+Rquare_xgb_oos = R2(predictions_oos_xgb, london_house_prices_2019_out_of_sample$asking_price)
+
+# Create a dataframe summarizing the performance (RMSE and R-Squared) of each model on test data
+model_performance_test <- data.frame(
+  Model = c("Linear Regression", "Decision Tree", "kNN", "Random Forest", "GBM", "XGBoost"),
+  RMSE = c(rmse_lr, rmse_tree, rmse_knn, rmse_rf, rmse_gbm, rmse_xgb),
+  R_Squared = c(Rsquare_lr, Rsquare_tree, Rsquare_knn, Rsquare_rf, Rsquare_gbm, Rsquare_xgb)
+)
+# Display the performance metrics for test data
+model_performance_test
+
+# Create a dataframe summarizing the performance (RMSE and R-Squared) of each model on out-of-sample data
+model_performance_oos <- data.frame(
+  Model = c("Linear Regression", "Decision Tree", "kNN", "Random Forest", "GBM", "XGBoost"),
+  RMSE = c(rmse_lr_oos, rmse_tree_oos, rmse_knn_oos, rmse_rf_oos, rmse_gbm_oos, rmse_xgb_oos),
+  R_Squared = c(Rquare_lr_oos, Rquare_tree_oos, Rquare_knn_oos, Rquare_rf_oos, Rquare_gbm_oos, Rquare_xgb_oos)
+)
+
+# Display the performance metrics for out-of-sample data
+model_performance_oos
+
+  
+```
+
+
+# Stacking
+
+Use stacking to ensemble your algorithms.
+
+```{r,warning=FALSE,  message=FALSE}
+# Set a seed for reproducibility
+set.seed(123)
+
+# Train a list of various models using the caret package
+model_list <- caretList(
+    price ~ distance_to_station + water_company + property_type + latitude + longitude + total_floor_area + average_income + london_zone + co2_emissions_current + num_tube_lines + num_rail_lines,
+    data = train_data,  
+    trControl = control,  
+    metric = "RMSE", 
+    methodList = c("glm"),  # Method for base models
+    tuneList = list(
+        # Define models to be stacked and their tuning parameters
+        rpart = caretModelSpec(method = "rpart", tuneGrid = expand.grid(cp = seq(0.0000, 0.0500, by = 0.001)), control = rpart.control(maxdepth = 6, minsplit = 30, minbucket = 20)),
+        knn = caretModelSpec(method = "knn", tuneGrid = expand.grid(.k = seq(1, 20, 1))),
+        ranger = caretModelSpec(method = "ranger", tuneGrid = expand.grid(
+            .mtry = seq(2, 8, by = 2),  
+            .splitrule = c("variance", "extratrees"),  
+            .min.node.size = 5 
+        )),
+        gbm = caretModelSpec(method = "gbm", tuneGrid = expand.grid(
+            .n.trees = 300,  
+            .interaction.depth = (6:8),      
+            .shrinkage = 0.15,
+            .n.minobsinnode = 10
+        )),
+        xgbTree = caretModelSpec(method = "xgbTree", tuneGrid = expand.grid(
+            nrounds = seq(250, 350, 50),
+            max_depth = (5:7),
+            eta = 0.15,
+            gamma = 0.05,
+            colsample_bytree = 0.75,
+            min_child_weight = 1,
+            subsample = 0.75
+        ))
+    )
+)
+
+# Print a summary of each trained model in the list
+summary(model_list)
+
+# Calculate and display the correlation between the models' predictions
+model_cor <- modelCor(resamples(model_list))
+model_cor
+
+# Compare models using dotplot visualization for RMSE metric
+resamples <- resamples(model_list)
+dotplot(resamples, metric = "RMSE")
+
+# Create an ensemble model using the models in the list, using Generalized Linear Model as the meta-model
+glm_ensemble <- caretStack(
+    model_list,
+    method = "glm",  # Method for the ensemble model
+    metric = "RMSE",  # Performance metric
+    trControl = control  # Training control settings
+)
+
+# Print a summary of the ensemble model
+summary(glm_ensemble)
+
+```
+
+```{r}
+# Predict the testing values
+predictions_ensemble <- predict(glm_ensemble,test_data)
+
+ensemble_results<-data.frame(  RMSE = RMSE(predictions_ensemble, test_data$price), 
+                            Rsquare = R2(predictions_ensemble, test_data$price))
+
+                            
+ensemble_results                         
+
+# Predict prices for out of sample data the same way
+predictions_oos_ensemble <- predict(glm_ensemble,london_house_prices_2019_out_of_sample)
+
+ensemble_results_oos<-data.frame(  RMSE = RMSE(predictions_oos_ensemble, london_house_prices_2019_out_of_sample$asking_price), 
+                            Rsquare = R2(predictions_oos_ensemble, london_house_prices_2019_out_of_sample$asking_price))
+
+                            
+ensemble_results_oos
+```
+
+# Pick investments
+
+In this section you should use the best algorithm you identified to choose 200 properties from the out of sample data.
+
+```{r,warning=FALSE,  message=FALSE}
+# Set the number of properties to choose for investment
+numchoose <- 200
+
+# Assign the out-of-sample data to a variable for ease of use
+oos <- london_house_prices_2019_out_of_sample
+
+# Predict the value of houses in the out-of-sample data using the ensemble model
+oos$predicted_price <- predict(glm_ensemble, oos)
+
+# Compute the profit margin for each property as the difference between predicted and asking price, relative to asking price
+oos$margin_profit <- (oos$predicted_price - oos$asking_price) / oos$asking_price
+
+# Sort properties by their profit margin in descending order to identify the most profitable investments
+oos <- oos %>% arrange(desc(margin_profit))
+
+# Initialize a new column 'buy' and set its default value to 0 (not selected for investment)
+oos$buy <- 0
+
+# Mark the top 'numchoose' (200 in this case) properties for investment by setting 'buy' to 1.
+# This choice is based on the highest profit margins calculated earlier, thus selecting the top 200 properties that are predicted to yield the highest profit margins when sold.
+oos$buy[1:200] <- 1
+
+# Calculate the mean profit margin of the top selected properties for investment
+mean_profit_margin <- mean(oos$margin_profit[oos$buy == 1]) * 100
+
+# Output the mean profit margin as a percentage
+mean_profit_margin
+
+# Output your choices to a CSV file. Change the file name to include your last and first name
+write.csv(oos, "rawat_vaani.csv")
+
+```
